@@ -1,0 +1,486 @@
+<head>
+    <script type="text/javascript" src="jquery-3.5.1.min.js"></script>
+
+
+
+    <script type="text/javascript">
+	var isWebkit = !!~navigator.userAgent.indexOf(' AppleWebKit/');
+    var keyCodes = {
+      // left
+      37: moveBackward,
+      // right
+      39: moveForward,
+      // backspace
+      8:  backDelete,
+      // delete
+      46: forwardDelete,
+      // enter
+      13: newLine
+    };
+
+    var promptText = '';
+    var restoreText= "";
+
+    var promptBox;
+
+    var prompt;
+    var column = 0;
+    var cursor = '<span class="jquery-console-cursor">&nbsp;</span>';
+
+    var inner = $('<div class="jquery-console-inner"></div>');
+    // erjiang: changed this from a text input to a textarea so we
+    // can get pasted newlines
+    var typer = $('<textarea autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" class="jquery-console-typer"></textarea>');
+
+  // Alternative method for focus without scrolling
+  $.fn.focusWithoutScrolling = function(){
+    var x = window.scrollX, y = window.scrollY;
+    $(this).focus();
+    window.scrollTo(x, y);
+  };
+
+
+	var cpLock = false;
+	typer.on('compositionstart', function () {
+    	cpLock = true;
+	});
+	typer.on('compositionend', function () {
+		console.log("end")
+    	cpLock = false;
+
+    	typer.consoleInsert($(this).val());
+
+    	$(this).val("");
+	});
+
+    typer.on("input",function(e){
+ 		if (!cpLock){
+    		console.log($(this).val());
+    	}
+
+    });
+
+    typer.keydown(function(e){
+      var keyCode = e.keyCode;
+
+      
+      if (e.key === "Unidentified") {
+           console.log("no keydown");
+            // android swift keyboard have always which == 229 we will triger proper
+            // event in input with e.fake == true
+             return;
+      }
+
+      if (keyCode in keyCodes) {
+          (keyCodes[keyCode])();
+          return false;
+      }
+
+    });
+
+    
+    typer.keypress(function(e){
+      console.log(keyCode);
+      var keyCode = e.keyCode || e.which;
+
+
+      if (isIgnorableKey(e)) {
+      	console.log("ignore")
+        return false;
+      }
+      typer.consoleInsert(keyCode);
+
+      
+      if (isWebkit) return false;    	
+
+    });
+	
+
+
+
+    typer.blur(function(){
+      inner.removeClass('jquery-console-focus');
+      inner.addClass('jquery-console-nofocus');
+    });
+
+
+    ////////////////////////////////////////////////////////////////////////
+    // Bind to the paste event of the input box so we know when we
+    // get pasted data
+    typer.bind('paste', function(e) {
+      // wipe typer input clean just in case
+      typer.val("");
+      // this timeout is required because the onpaste event is
+      // fired *before* the text is actually pasted
+      setTimeout(function() {
+        typer.consoleInsert(typer.val());
+        typer.val("");
+      }, 0);
+    });
+
+
+    // Make a new prompt box
+    function newPromptBox() {
+      column = 0;
+      promptText = '';
+      ringn = 0; // Reset the position of the history ring
+
+      promptBox = $('<div class="jquery-console-prompt-box"></div>');
+      var label = $('<span class="jquery-console-prompt-label"></span>');
+      var labelText = ""
+      promptBox.append(label.text(labelText).show());
+      label.html(label.html().replace(' ','&nbsp;'));
+      prompt = $('<span class="jquery-console-prompt"></span>');
+      promptBox.append(prompt);
+      inner.append(promptBox);
+      updatePromptDisplay();
+    }
+
+    function isIgnorableKey(e) {
+      // for now just filter alt+tab that we receive on some platforms when
+      // user switches windows (goes away from the browser)
+      return ((e.keyCode == keyCodes.tab || e.keyCode == 192) && e.altKey);
+    }
+
+    // Delete the character at the current position
+    function deleteCharAtPos(){
+      if (column < promptText.length){
+        promptText =
+          promptText.substring(0,column) +
+          promptText.substring(column+1);
+        restoreText = promptText;
+        return true;
+      } else return false;
+    }
+
+    function backDelete() {
+      if (moveColumn(-1)){
+        deleteCharAtPos();
+        updatePromptDisplay();
+      }
+    }
+
+    function forwardDelete() {
+      if (deleteCharAtPos()){
+        updatePromptDisplay();
+      }
+    }
+
+    function deleteUntilEnd() {
+      while(deleteCharAtPos()) {
+        updatePromptDisplay();
+      }
+    }
+
+    function deleteNextWord() {
+      // A word is defined within this context as a series of alphanumeric
+      // characters.
+      // Delete up to the next alphanumeric character
+      while(
+        column < promptText.length &&
+          !isCharAlphanumeric(promptText[column])
+      ) {
+        deleteCharAtPos();
+        updatePromptDisplay();
+      }
+      // Then, delete until the next non-alphanumeric character
+      while(
+        column < promptText.length &&
+          isCharAlphanumeric(promptText[column])
+      ) {
+        deleteCharAtPos();
+        updatePromptDisplay();
+      }
+    }
+
+    function newLine() {
+      var lines = promptText.split("\n");
+      var last_line = lines.slice(-1)[0];
+      var spaces = last_line.match(/^(\s*)/g)[0];
+      var new_line = "\n" + spaces;
+      promptText += new_line;
+      moveColumn(new_line.length);
+      updatePromptDisplay();
+    }
+
+
+    ////////////////////////////////////////////////////////////////////////
+    // Handle normal character insertion
+    // data can either be a number, which will be interpreted as the
+    // numeric value of a single character, or a string
+    typer.consoleInsert = function(data){
+      // TODO: remove redundant indirection
+      var text = (typeof data == 'number') ? String.fromCharCode(data) : data;
+
+      var before = promptText.substring(0,column);
+      var after = promptText.substring(column);
+      promptText = before + text + after;
+      moveColumn(text.length);
+      restoreText = promptText;
+      updatePromptDisplay();
+    };
+
+
+    ////////////////////////////////////////////////////////////////////////
+    // Move to another column relative to this one
+    // Negative means go back, positive means go forward.
+    function moveColumn(n){
+      if (column + n >= 0 && column + n <= promptText.length){
+        column += n;
+        return true;
+      } else return false;
+    }
+
+    function moveForward() {
+      if(moveColumn(1)) {
+        updatePromptDisplay();
+        return true;
+      }
+      return false;
+    }
+
+    function moveBackward() {
+      if(moveColumn(-1)) {
+        updatePromptDisplay();
+        return true;
+      }
+      return false;
+    }
+
+    function moveToStart() {
+      if (moveColumn(-column))
+        updatePromptDisplay();
+    }
+
+    function moveToEnd() {
+      if (moveColumn(promptText.length-column))
+        updatePromptDisplay();
+    }
+
+
+    function moveToNextWord() {
+      while(
+        column < promptText.length &&
+          !isCharAlphanumeric(promptText[column]) &&
+          moveForward()
+      ) {}
+      while(
+        column < promptText.length &&
+          isCharAlphanumeric(promptText[column]) &&
+          moveForward()
+      ) {}
+    }
+
+    function moveToPreviousWord() {
+      // Move backward until we find the first alphanumeric
+      while(
+        column -1 >= 0 &&
+          !isCharAlphanumeric(promptText[column-1]) &&
+          moveBackward()
+      ) {}
+      // Move until we find the first non-alphanumeric
+      while(
+        column -1 >= 0 &&
+          isCharAlphanumeric(promptText[column-1]) &&
+          moveBackward()
+      ) {}
+    }
+
+
+    function isCharAlphanumeric(charToTest) {
+      if(typeof charToTest == 'string') {
+        var code = charToTest.charCodeAt();
+        return (code >= 'A'.charCodeAt() && code <= 'Z'.charCodeAt()) ||
+          (code >= 'a'.charCodeAt() && code <= 'z'.charCodeAt()) ||
+          (code >= '0'.charCodeAt() && code <= '9'.charCodeAt());
+      }
+      return false;
+    }
+
+    // Scroll to the bottom of the view
+    function scrollToBottom() {
+
+	    inner.prop({ scrollTop: inner.prop("scrollHeight") });
+
+    }
+
+    // Scroll to the bottom of the view
+    function scrollToLeft() {
+
+    	var cp = $(".jquery-console-cursor").position();
+
+    	console.log(cp);
+
+
+
+    }
+    ////////////////////////////////////////////////////////////////////////
+    // Update the prompt display
+    function updatePromptDisplay(){
+      var line = promptText;
+      var html = '';
+      if (column > 0 && line == ''){
+        // When we have an empty line just display a cursor.
+        html = cursor;
+      } else if (column == promptText.length){
+        // We're at the end of the line, so we need to display
+        // the text *and* cursor.
+
+        html = htmlEncode(line) + cursor;
+
+      } else {
+        // Grab the current character, if there is one, and
+        // make it the current cursor.
+
+        var before = line.substring(0, column);
+        var current = line.substring(column,column+1);
+        if (current){
+          	current =
+            '<span class="jquery-console-cursor">' +
+            htmlEncode(current) +
+            '</span>';
+       
+        }
+        var after = line.substring(column+1);
+        html = htmlEncode(before) + current + htmlEncode(after);
+      }
+      prompt.html(html);
+      scrollToLeft()
+
+	  typer.css($(".jquery-console-cursor").position());
+    }
+
+    function htmlEncode(text){
+      return (
+        text.replace(/&/g,'&amp;')
+          .replace(/</g,'&lt;')
+          .replace(/</g,'&lt;')
+          .replace(/ /g,'&nbsp;')
+          .replace(/\n/g,'<br />')
+      );
+    }
+
+
+
+
+	$( document ).ready(function() {
+		$(".console").append(inner);
+
+		inner.append(typer);
+		//typer.css({position:'absolute',top:0,left:'-9999px'});
+
+		newPromptBox();
+
+ 		typer.focus();
+ 		console.log(typer);
+
+		inner.addClass('jquery-console-focus');
+
+ 		$(".console").click(function(){
+      		// Don't mess with the focus if there is an active selection
+      		if (window.getSelection().toString()) {
+        		return false;
+      		}
+
+      		inner.addClass('jquery-console-focus');
+      		inner.removeClass('jquery-console-nofocus');
+      		if (isWebkit) {
+        		typer.focusWithoutScrolling();
+      		} else {
+        		typer.css('position', 'fixed').focus();
+      		}
+      		return false;
+    	});
+		
+	});
+
+    </script>
+
+    <style type="text/css">
+    	*{
+    		padding: 0;
+    		margin: 0;
+    	}
+       /* Third console */
+      div.console {
+       background:#ccc; 
+       width:200px; 
+       height:200px;
+       overflow-x:auto;
+       overflow-x:auto;
+       font-size: 14px; 
+       margin:0;
+       writing-mode: vertical-rl;
+       overflow-wrap: break-word;
+
+
+       }
+
+
+      div.console::-webkit-scrollbar {
+    		width: 6px;
+    		height: 6px;
+    		background: var(--background,#000);
+		}
+
+		div.console::-webkit-scrollbar-thumb, .terminal::-webkit-scrollbar-thumb:hover {
+    		background: var(--color,#aaa);
+		}
+
+
+
+      div.console div.jquery-console-inner
+       {  
+
+       	background: #cce;
+		left: 0px;
+		color:#fff;
+       }
+
+	  textarea.jquery-console-typer
+	  {
+	  	width:1px;
+	  	height: 1px;
+	  	overflow: hidden;
+	  	background: transparent;
+		opacity:0;
+		position: absolute;
+	  }
+      div.console div.jquery-console-prompt-box
+       { color:#fff; font-family:monospace; }
+      div.console div.jquery-console-focus span.jquery-console-cursor
+       { background:#fff; color:#eee; font-weight:bold }
+
+      div.console div.jquery-console-message-error
+       { color:#ef0505; font-family:sans-serif; font-weight:bold;
+         padding:0.1em; }
+      div.console div.jquery-console-message-success
+       { color:#187718; font-family:monospace;
+         padding:0.1em; }
+      div.console span.jquery-console-prompt-label {
+      font-weight:bold }   	
+
+
+	.jquery-console-cursor {
+	  color:#fff;
+	  background: #fff;
+      opacity: 1;
+      text-decoration: blink;
+ 	  animation: blinker 1s linear infinite;
+ 	  min-height: 8px;
+ 	  min-width: 16px;
+ 	  display: inline-block;
+
+
+    }
+
+
+    </style>
+</head>
+
+<body>
+	<div class="console">
+
+	</div>
+
+</body>
